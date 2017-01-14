@@ -1,27 +1,22 @@
 package service
 
 import (
-	"net"
-	"github.com/siddontang/goredis"
 	"bufio"
-	"github.com/siddontang/go/hack"
-	"strings"
 	"github.com/laohanlinux/go-logger/logger"
+	"github.com/shili1992/Orangedb/common"
+	"github.com/siddontang/go/hack"
+	"github.com/siddontang/go/num"
+	"github.com/siddontang/goredis"
+	"net"
 	"runtime"
 	"strconv"
-	"github.com/siddontang/go/num"
-	"github.com/shili/Orangedb/common"
+	"strings"
 )
 
 var (
 	Delims = []byte("\r\n")
 
 	NullBulk = []byte("-1")
-	NullArray = []byte("-1")
-
-	PONG = "PONG"
-	OK = "OK"
-	NOKEY = "NOKEY"
 )
 
 const (
@@ -29,7 +24,7 @@ const (
 	WriterBufferSize = 4096
 )
 
-type  Client struct {
+type Client struct {
 	service    *Service
 	remoteAddr string
 }
@@ -38,10 +33,9 @@ func (c *Client) close() {
 
 }
 
-
 //RespClient 继承子  Client
 type RespClient struct {
-	* Client
+	*Client
 	conn       net.Conn
 	respReader *goredis.RespReader //用于读取 客户端的内容
 	respWriter *RespWriter
@@ -49,7 +43,7 @@ type RespClient struct {
 	args       [][]byte
 }
 
-func (c *RespClient )  DoRequest() {
+func (c *RespClient) DoRequest() {
 	defer func() {
 		if e := recover(); e != nil {
 			buf := make([]byte, 4096)
@@ -87,16 +81,16 @@ func (c *RespClient) handleRequest(reqData [][]byte) error {
 	}
 
 	argsLen := len(c.args)
-	argStrs := make([]string,argsLen)
-	for i:=0;i<argsLen;i++{
+	argStrs := make([]string, argsLen)
+	for i := 0; i < argsLen; i++ {
 		argStrs[i] = string(c.args[i])
 	}
 
-	if c.cmd == "select"||c.cmd == "xselect"||c.cmd == "ping" {
+	if c.cmd == "select" || c.cmd == "xselect" || c.cmd == "ping" {
 		c.respWriter.writeStatus("OK")
 		c.respWriter.flush()
 		return nil
-	}/*else if c.cmd == "get" {
+	} /*else if c.cmd == "get" {
 		logger.Infof("cmd:%s, args:%v",c.cmd,argStrs)
 		c.respWriter.writeStatus("OK")
 		c.respWriter.flush()
@@ -116,8 +110,8 @@ func (c *RespClient) handleRequest(reqData [][]byte) error {
 		c.respWriter.flush()
 		return nil
 	}*/
-	if err :=c.handleCommand();err!=nil{
-		c.respWriter.writeError(err)  //回复错误信息
+	if err := c.handleCommand(); err != nil {
+		c.respWriter.writeError(err) //回复错误信息
 		c.respWriter.flush()
 		return err
 	}
@@ -125,9 +119,9 @@ func (c *RespClient) handleRequest(reqData [][]byte) error {
 }
 
 func (c *RespClient) handleCommand() error {
-	if cmdfunc,ok:=commandFuncMap[c.cmd];!ok{
+	if cmdfunc, ok := commandFuncMap[c.cmd]; !ok {
 		return common.ErrNotFound
-	}else if err:= cmdfunc(c);err!=nil{
+	} else if err := cmdfunc(c); err != nil {
 		return err
 	}
 	return nil
@@ -151,7 +145,6 @@ func (w *RespWriter) writeStatus(status string) {
 	w.buffer.Write(hack.Slice(status))
 	w.buffer.Write(Delims)
 }
-
 
 func (w *RespWriter) writeInteger(n int64) {
 	w.buffer.WriteByte(':')

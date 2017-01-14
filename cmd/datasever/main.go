@@ -10,9 +10,9 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/shili/Orangedb/service"
-	"github.com/shili/Orangedb/store"
 	"github.com/laohanlinux/go-logger/logger"
+	"github.com/shili1992/Orangedb/service"
+	"github.com/shili1992/Orangedb/store"
 )
 
 // Command line defaults
@@ -55,23 +55,20 @@ func main() {
 	}
 	os.MkdirAll(raftDir, 0700)
 
-
-
 	// Init log confiure
 	logfile := flag.Arg(1)
 	if logfile == "" {
 		fmt.Fprintf(os.Stderr, "No logDir storage directory specified\n")
 		os.Exit(1)
 	}
-	os.MkdirAll("log",0700)
-	os.Create("log/"+logfile)
+	os.MkdirAll("log", 0700)
+	os.Create("log/" + logfile)
 	logger.SetConsole(true)
-	err := logger.SetRollingDaily("log",logfile)
+	err := logger.SetRollingDaily("log", logfile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "No log  directory specified\n")
 		os.Exit(1)
 	}
-
 
 	s := store.New()
 	s.RaftDir = raftDir
@@ -81,7 +78,7 @@ func main() {
 	}
 
 	//start  listen http service
-	h := service.New(httpAddr,respAddr, s)
+	h := service.New(httpAddr, respAddr, s)
 	if err := h.StartService(); err != nil {
 		log.Fatalf("failed to start  service: %s", err.Error())
 	}
