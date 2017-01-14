@@ -10,14 +10,15 @@ calvin 系统实现
 + 使用raft 支持 多副本
 
 &nbsp;
-##Cient tool
+##Client tool
    客户端使用ledisdb的客户端工具 ledis-cli,使用方法如下：
->  Usage of  ledis-cli:
+```
+Usage of  ledis-cli:
   -h string
-   &emsp;&emsp;data  server ip (default 127.0.0.1) (default "127.0.0.1")
+        dataserver ip (default 127.0.0.1) (default "127.0.0.1")
   -p int
-   &emsp;&emsp;data  server port (default 56000) 
-   
+        dataserver port (default 56000)   
+```
 ##Build and install
 ```bash
 mkdir $WORKSPACE
