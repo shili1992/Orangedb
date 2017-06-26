@@ -1,4 +1,4 @@
-package store
+package Orangedb
 
 import (
 	"io/ioutil"

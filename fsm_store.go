@@ -4,7 +4,7 @@
 // the new value.
 //
 // Distributed consensus is provided via the Raft algorithm.
-package store
+package Orangedb
 
 import (
 	"bytes"
@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -22,43 +21,45 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/raft-boltdb"
 	"github.com/laohanlinux/go-logger/logger"
+	"github.com/hashicorp/go-msgpack/codec"
 )
 
 const (
 	retainSnapshotCount = 2
-	raftTimeout         = 10 * time.Second
+	raftTimeout = 10 * time.Second
 )
 
-type command struct {
-	Op    string `json:"op,omitempty"`
-	Key   string `json:"key,omitempty"`
-	Value string `json:"value,omitempty"`
-}
+
 
 // Store is a simple key-value store, where all changes are made via Raft consensus.
-type Store struct {
-	RaftDir  string
-	RaftBind string
+//实现了   service.Store interface   and raft.FSM interface
+type FsmStore struct {
+	RaftDir     string
+	RaftBind    string
 
-	mu sync.Mutex
-	m  map[string]string // The key-value store for the system.
+	mu          sync.Mutex
+	m           map[string]string // The key-value store for the system.
 
-	raft *raft.Raft // The consensus mechanism
+	Raft        *raft.Raft        // The consensus mechanism  //todo(shili )raft 功能放置的位置不好
 
-	logger *log.Logger
+	BatchSyncCh chan *BatchTxn    //该通道用于接收batchTxn，并拷贝到follower
 }
 
 // New returns a new Store.
-func New() *Store {
-	return &Store{
+func NewFsmStore() *FsmStore {
+	return &FsmStore{
 		m:      make(map[string]string),
-		logger: log.New(os.Stderr, "[store] ", log.LstdFlags),
 	}
+}
+
+//返回raft 服务的结构
+func (s *FsmStore) GetRaftSevice() *raft.Raft {
+	return s.Raft
 }
 
 // Open opens the store. If enableSingle is set, and there are no existing peers,
 // then this node becomes the first node, and therefore leader, of the cluster.
-func (s *Store) Open(enableSingle bool) error {
+func (s *FsmStore) Open(enableSingle bool) error {
 	// Setup Raft configuration.
 	config := raft.DefaultConfig()
 
@@ -71,7 +72,7 @@ func (s *Store) Open(enableSingle bool) error {
 	// Allow the node to entry single-mode, potentially electing itself, if
 	// explicitly enabled and there is only 1 node in the cluster already.
 	if enableSingle && len(peers) <= 1 {
-		s.logger.Println("enabling single-node mode")
+		logger.Infof("enabling single-node mode")
 		config.EnableSingleNode = true
 		config.DisableBootstrapAfterElect = false
 	}
@@ -81,7 +82,7 @@ func (s *Store) Open(enableSingle bool) error {
 	if err != nil {
 		return err
 	}
-	transport, err := raft.NewTCPTransport(s.RaftBind, addr, 3, 10*time.Second, os.Stderr)
+	transport, err := raft.NewTCPTransport(s.RaftBind, addr, 3, 10 * time.Second, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -102,16 +103,19 @@ func (s *Store) Open(enableSingle bool) error {
 	}
 
 	// Instantiate the Raft systems.
-	ra, err := raft.NewRaft(config, (*fsm)(s), logStore, logStore, snapshots, peerStore, transport)
+	ra, err := raft.NewRaft(config, (*FsmStore)(s), logStore, logStore, snapshots, peerStore, transport)
 	if err != nil {
 		return fmt.Errorf("new raft: %s", err)
 	}
-	s.raft = ra
+	s.Raft = ra
 	return nil
 }
 
+
+
+
 // Get returns the value for the given key. 直接本地设置
-func (s *Store) Get(key string) (string, error) {
+func (s *FsmStore) Get(key string) (string, error) {
 	s.mu.Lock()
 	logger.Info("Get a value by ", string(key))
 	defer s.mu.Unlock()
@@ -119,80 +123,129 @@ func (s *Store) Get(key string) (string, error) {
 }
 
 // Set sets the value for the given key.  发送master raft ,然后在进行set
-func (s *Store) Set(key, value string) error {
-	if s.raft.State() != raft.Leader {
-		return fmt.Errorf("not leader")
+func (s *FsmStore) Set(key, value string) error {
+	if s.Raft.State() != raft.Leader {
+		logger.Infof("not leader")
+		return ErrNotLeader
 	}
 
-	c := &command{
+	applyCmd := &applyCommand{
 		Op:    "set",
 		Key:   key,
 		Value: value,
 	}
-	b, err := json.Marshal(c)
+
+	bs, err := s.MsgpackEncode(applyCmd);
+	if nil != err {
+		logger.Warnf("encode  batchTxn fail,err=%v", err)
+		return err
+	}
+	c := &Command{
+		Type:  ApplyCommand,
+		Data:  bs,
+	}
+	b, err := s.MsgpackEncode(c);
 	if err != nil {
 		return err
 	}
-
-	f := s.raft.Apply(b, raftTimeout)
+	f := s.Raft.Apply(b, raftTimeout)
 	return f.Error()
 }
 
+func (s *FsmStore) MsgpackEncode(ts interface{}) (bs []byte, err error) {
+	err = codec.NewEncoderBytes(&bs, &codec.MsgpackHandle{}).Encode(ts)
+	return
+}
+
+
+
 // Delete deletes the given key.  发送master raft ,然后在进行删除
-func (s *Store) Delete(key string) error {
-	if s.raft.State() != raft.Leader {
-		return fmt.Errorf("not leader")
+func (s *FsmStore) Delete(key string) error {
+	if s.Raft.State() != raft.Leader {
+		logger.Infof("not leader")
+		return ErrNotLeader
 	}
 
-	c := &command{
-		Op:  "delete",
+	applyCmd := &applyCommand{
+		Op:  "del",
 		Key: key,
 	}
-	b, err := json.Marshal(c)
+
+	bs, err := s.MsgpackEncode(applyCmd);
+	if nil != err {
+		logger.Warnf("encode  batchTxn fail,err=%v", err)
+		return err
+	}
+
+	c := &Command{
+		Type:  ApplyCommand,
+		Data:  bs,
+	}
+
+	b, err := s.MsgpackEncode(c);
 	if err != nil {
 		return err
 	}
 
-	f := s.raft.Apply(b, raftTimeout)
+	f := s.Raft.Apply(b, raftTimeout)
 	return f.Error()
 }
 
 // Join joins a node, located at addr, to this store. The node must be ready to
 // respond to Raft communications at that address.
-func (s *Store) Join(addr string) error {
-	s.logger.Printf("received join request for remote node as %s", addr)
+func (s *FsmStore) Join(addr string) error {
+	logger.Infof("received join request for remote node as %s", addr)
 
-	f := s.raft.AddPeer(addr)
+	f := s.Raft.AddPeer(addr)
 	if f.Error() != nil {
 		return f.Error()
 	}
-	s.logger.Printf("node at %s joined successfully", addr)
+	logger.Infof("node at %s joined successfully", addr)
 	return nil
 }
 
-type fsm Store
 
+func (s *FsmStore) MsgpackDecode(buf []byte, ts interface{}) error {
+	return codec.NewDecoderBytes(buf, &codec.MsgpackHandle{}).Decode(ts)
+}
+//raft.FSM接口
 // Apply applies a Raft log entry to the key-value store.
-func (f *fsm) Apply(l *raft.Log) interface{} {
-	var c command
-	if err := json.Unmarshal(l.Data, &c); err != nil {
+func (f *FsmStore) Apply(l *raft.Log) interface{} {
+	var c Command
+	if err := f.MsgpackDecode(l.Data, &c); err != nil {
 		panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
 	}
 
-	switch c.Op {
-	case "set":
-		logger.Debug("shili:set a key:value ", string(c.Key),string(c.Value))
-		return f.applySet(c.Key, c.Value)
-	case "delete":
-		logger.Debug("shili:delete  a key ", string(c.Key))
-		return f.applyDelete(c.Key)
-	default:
-		panic(fmt.Sprintf("unrecognized command op: %s", c.Op))
+	switch c.Type {
+	case ApplyCommand:
+		var applyCmd applyCommand
+		if err := f.MsgpackDecode(c.Data, &applyCmd); err != nil {
+			panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
+		}
+
+		switch applyCmd.Op {
+		case "set":
+			logger.Debug("set a key:value ", string(applyCmd.Key), string(applyCmd.Value))
+			return f.applySet(applyCmd.Key, applyCmd.Value)
+		case "del":
+			logger.Debug("delete  a key ", string(applyCmd.Key))
+			return f.applyDelete(applyCmd.Key)
+		default:
+			panic(fmt.Sprintf("unrecognized command op: %s", applyCmd.Op))
+		}
+	case BatchSubCommand:
+		var batchCmd batchSubCommand
+		if err := f.MsgpackDecode(c.Data, &batchCmd); err != nil {
+			panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
+		}
+		f.BatchSyncCh<- batchCmd.BatchTxn    //像 reader 传递一个信息
 	}
+	return nil
 }
 
+//raft.FSM接口
 // Snapshot returns a snapshot of the key-value store.
-func (f *fsm) Snapshot() (raft.FSMSnapshot, error) {
+func (f *FsmStore) Snapshot() (raft.FSMSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -204,8 +257,9 @@ func (f *fsm) Snapshot() (raft.FSMSnapshot, error) {
 	return &fsmSnapshot{store: o}, nil
 }
 
+//raft.FSM接口
 // Restore stores the key-value store to a previous state.
-func (f *fsm) Restore(rc io.ReadCloser) error {
+func (f *FsmStore) Restore(rc io.ReadCloser) error {
 	o := make(map[string]string)
 	if err := json.NewDecoder(rc).Decode(&o); err != nil {
 		return err
@@ -217,7 +271,7 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 	return nil
 }
 
-func (f *fsm) applySet(key, value string) interface{} {
+func (f *FsmStore) applySet(key, value string) interface{} {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	//logger.Info("set a key:value ", string(key),string(value))
@@ -225,7 +279,7 @@ func (f *fsm) applySet(key, value string) interface{} {
 	return nil
 }
 
-func (f *fsm) applyDelete(key string) interface{} {
+func (f *FsmStore) applyDelete(key string) interface{} {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	//logger.Info("delete a value by ", string(key))
