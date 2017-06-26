@@ -37,15 +37,25 @@ go build
 cd src/github.com/shili1992/Orangedb/cmd/dataserver
 ./dataserver  node0  log0 &
 ``` 
-+ **开启一个集群(只有副本，没有分片)**
++ **开启集群(只有副本，没有分片)**
 ```bash
-cd src/github.com/shili1992/Orangedb/cmd/dataserver
-./dataserver  node0  log0 &
-sleep 2
-./dataserver -haddr 127.0.0.1:11001 -raddr 127.0.0.1:12001  -respaddr 127.0.0.1:56001  -join 127.0.0.1:11000 node1 log1 &
-sleep 2
-./dataserver -haddr 127.0.0.1:11002 -raddr 127.0.0.1:12002   -respaddr 127.0.0.1:56002 -join 127.0.0.1:11000 node2 log2 &
-``` 
+nohup  ./dataserver -haddr 127.0.0.1:11000 -raddr 127.0.0.1:12000  -respaddr 127.0.0.1:56000  -tranaddr 127.0.0.1:37000  node0  log0 >log/0.log &
+sleep 1
+nohup  ./dataserver -haddr 127.0.0.1:11001 -raddr 127.0.0.1:12001  -respaddr 127.0.0.1:56001  -tranaddr 127.0.0.1:37001  -join 127.0.0.1:11000  node1 log1  >log/1.log &
+sleep 1
+nohup  ./dataserver -haddr 127.0.0.1:11002 -raddr 127.0.0.1:12002   -respaddr 127.0.0.1:56002 -tranaddr 127.0.0.1:37002 -join 127.0.0.1:11000 node2 log2  >log/2.log &
+```
++ **开启集群(2Partition,2 cluster)**
+```bash
+nohup  ./dataserver -haddr 127.0.0.1:11000 -raddr 127.0.0.1:12000  -respaddr 127.0.0.1:56000 -tranaddr 127.0.0.1:37000 -conf 2part_2cluster.conf  -C 0  -G 2 -g 0  node0 log0 >log/0.log &
+sleep 1
+nohup  ./dataserver -haddr 127.0.0.1:11001 -raddr 127.0.0.1:12001  -respaddr 127.0.0.1:56001 -tranaddr 127.0.0.1:37001 -conf 2part_2cluster.conf  -C 0  -G 2 -g 1  node1 log1 >log/1.log &
+sleep 1
+nohup  ./dataserver -haddr 127.0.0.1:11002 -raddr 127.0.0.1:12002  -respaddr 127.0.0.1:56002 -tranaddr 127.0.0.1:37002 -conf 2part_2cluster.conf  -join 127.0.0.1:11000 -C 1  -G 2 -g 0  node2 log2 >log/2.log &
+sleep 1
+nohup  ./dataserver -haddr 127.0.0.1:11003 -raddr 127.0.0.1:12003  -respaddr 127.0.0.1:56003 -tranaddr 127.0.0.1:37003 -conf 2part_2cluster.conf  -join 127.0.0.1:11001 -C 1  -G 2 -g 1  node3 log3 >log/3.log &
+
+```
 
 
 
